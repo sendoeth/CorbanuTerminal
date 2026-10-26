@@ -2,7 +2,7 @@ name: stress-1201 (CorbanuTerminal #1201 Windows flake)
 
 on:
   push:
-    branches: [stress-1201]
+    branches: [stress-1201, stress-1201-control]
   workflow_dispatch:
 
 permissions:
@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           cd src
-          git apply --verbose "../harness/${{ matrix.patch }}"
+          git apply --verbose --ignore-whitespace "../harness/${{ matrix.patch }}"  # windows checkout is CRLF, patch is LF
           git diff --stat
 
       - name: Record environment
