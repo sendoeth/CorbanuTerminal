@@ -1,0 +1,111 @@
+name: stress-1201 (CorbanuTerminal #1201 Windows flake)
+
+on:
+  push:
+    branches: [stress-1201]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: main-55ffd027-windows-2022
+            os: windows-2022
+            sha: 55ffd0277cba12bbe90dfa687a086809d14c4c10
+            patch: ""
+          - label: main-55ffd027-windows-2025
+            os: windows-2025
+            sha: 55ffd0277cba12bbe90dfa687a086809d14c4c10
+            patch: ""
+          - label: control-pre1229-3b56e695-windows-2022
+            os: windows-2022
+            sha: 3b56e6952e3e85fc0b940ee319b7a19d344a6ff5
+            patch: patches/pr1203-trace.diff
+    env:
+      RUNS: "150"
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+
+      - name: Checkout CorbanuTerminal at ${{ matrix.sha }}
+        uses: actions/checkout@v4
+        with:
+          repository: CorbanuCore/CorbanuTerminal
+          ref: ${{ matrix.sha }}
+          path: src
+          persist-credentials: false
+
+      - name: Apply #1203 trace patch (control only)
+        if: matrix.patch != ''
+        shell: bash
+        run: |
+          cd src
+          git apply --verbose "../harness/${{ matrix.patch }}"
+          git diff --stat
+
+      - name: Record environment
+        shell: bash
+        run: |
+          mkdir -p results
+          {
+            echo "label: ${{ matrix.label }}"
+            echo "runner_image: ${ImageOS:-} ${ImageVersion:-}"
+            echo "commit: ${{ matrix.sha }}"
+            echo "patch: ${{ matrix.patch || 'none' }}"
+            echo "--- windows"
+            cmd //c ver
+            powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | Format-List"
+            powershell -NoProfile -Command "Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List"
+            powershell -NoProfile -Command "'MemoryGB: ' + [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)"
+            echo "--- defender realtime monitoring disabled?"
+            powershell -NoProfile -Command "try { (Get-MpPreference).DisableRealtimeMonitoring } catch { 'unavailable' }"
+            echo "--- toolchain"
+            cd src/codex-rs
+            rustup show active-toolchain || rustup toolchain install
+            rustc -Vv
+            cargo -V
+          } 2>&1 | tee results/environment.txt
+
+      - name: Build codex-login unit-test binary
+        shell: bash
+        run: |
+          cd src/codex-rs
+          cargo test -p codex-login --lib --no-run --message-format=json 2> ../../results/build.stderr.log \
+            | python ../../harness/tools/find_test_binary.py > ../../results/test_binary.txt
+          cat ../../results/test_binary.txt
+
+      - name: Stress test (idle, cpu_io, selfspawn x RUNS)
+        shell: bash
+        run: |
+          BIN="$(cat results/test_binary.txt)"
+          cd src/codex-rs/login
+          python ../../../harness/tools/stress_1201.py "$BIN" ../../../results "$RUNS" | tee ../../../results/console.log
+
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## ${{ matrix.label }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat results/summary.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "no summary" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.label }}
+          path: results/
+          retention-days: 90

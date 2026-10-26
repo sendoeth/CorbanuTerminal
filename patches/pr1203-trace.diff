@@ -1,0 +1,44 @@
+diff --git a/codex-rs/login/src/auth/external_bearer.rs b/codex-rs/login/src/auth/external_bearer.rs
+index 518c465e23..d6bbad95c8 100644
+--- a/codex-rs/login/src/auth/external_bearer.rs
++++ b/codex-rs/login/src/auth/external_bearer.rs
+@@ -304,8 +304,37 @@ async fn run_provider_auth_command(
+         command.env_remove("PFTERMINAL_PROVIDER_AUTH_FORCE_REFRESH");
+     }
+ 
+-    let output = tokio::time::timeout(config.timeout(), command.output())
+-        .await
++    // Test-only timing diagnostics for #1201. Never log the helper's configuration,
++    // account, stdout or stderr: even a failing auth command can contain a token.
++    #[cfg(test)]
++    let (attempt_id, attempt_started) = {
++        use std::sync::atomic::AtomicU64;
++        use std::sync::atomic::Ordering;
++
++        static NEXT_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
++        let attempt_id = NEXT_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed);
++        let attempt_started = Instant::now();
++        eprintln!(
++            "provider_auth_helper attempt={attempt_id} phase=dispatch force_refresh={force_refresh}"
++        );
++        (attempt_id, attempt_started)
++    };
++
++    let output = tokio::time::timeout(config.timeout(), command.output()).await;
++    #[cfg(test)]
++    {
++        let outcome = match &output {
++            Err(_) => "timeout",
++            Ok(Err(_)) => "io_error",
++            Ok(Ok(output)) if output.status.success() => "success",
++            Ok(Ok(_)) => "nonzero_exit",
++        };
++        let elapsed_us = attempt_started.elapsed().as_micros();
++        eprintln!(
++            "provider_auth_helper attempt={attempt_id} phase=complete outcome={outcome} elapsed_us={elapsed_us}"
++        );
++    }
++    let output = output
+         .map_err(|_| {
+             io::Error::other(format!(
+                 "provider auth command `{}` timed out after {} ms",
