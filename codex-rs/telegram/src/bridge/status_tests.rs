@@ -157,3 +157,54 @@ fn status_clamps_an_overfull_window() {
 
     assert!(token_usage_text(&usage).contains("(100%)"));
 }
+
+// ---- #1570 before-fix reproduction (main's behavior: the bridge stores each
+// ThreadTokenUsageUpdated as sent and /status renders it with token_usage_text) ----
+
+const WINDOW_1570: i64 = 353_400;
+
+/// The info `recompute_token_usage` (core/src/session/mod.rs) sends after
+/// compaction or rollback on a thread whose provider never reported usage.
+fn recomputed_without_reports_1570(estimate: i64) -> ThreadTokenUsage {
+    codex_protocol::protocol::TokenUsageInfo {
+        total_token_usage: codex_protocol::protocol::TokenUsage::default(),
+        last_token_usage: codex_protocol::protocol::TokenUsage {
+            total_tokens: estimate,
+            ..codex_protocol::protocol::TokenUsage::default()
+        },
+        model_context_window: Some(WINDOW_1570),
+    }
+    .into()
+}
+
+#[test]
+fn issue1570_recompute_on_thread_without_reports_is_not_a_zero_total() {
+    let text = token_usage_text(&recomputed_without_reports_1570(/*estimate*/ 12_000));
+    assert!(
+        text.contains("Thread total: not reported by the provider"),
+        "{text}"
+    );
+}
+
+#[test]
+fn issue1570_context_window_fill_keeps_last_reported_total() {
+    let mut info = codex_protocol::protocol::TokenUsageInfo::new_or_append(
+        /*info*/ &None,
+        &Some(codex_protocol::protocol::TokenUsage {
+            input_tokens: 683_203_904,
+            cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            output_tokens: 1_681_470,
+            reasoning_output_tokens: 0,
+            total_tokens: 684_885_374,
+        }),
+        Some(WINDOW_1570),
+    )
+    .expect("a report creates usage info");
+    info.fill_to_context_window(WINDOW_1570);
+    let text = token_usage_text(&info.into());
+    assert!(
+        text.contains("Thread total: 684,885,374 tokens (683,203,904 in, 1,681,470 out)"),
+        "{text}"
+    );
+}
