@@ -1,0 +1,37 @@
+name: ci-1586
+# fork-only test branch for CorbanuCore/CorbanuTerminal#1586 (never part of the PR): the codex-telegram tests,
+# clippy and rustfmt on the PR commit merged with current main
+on:
+  push:
+    branches: [ci-1586]
+permissions:
+  contents: read
+jobs:
+  telegram:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: free disk (the Rust build of codex-telegram needs ~26 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: rustfmt
+        working-directory: codex-rs
+        run: cargo fmt -p codex-telegram -- --check
+      - name: cargo test -p codex-telegram
+        working-directory: codex-rs
+        run: cargo test -p codex-telegram 2>&1 | tee ../telegram-tests.txt; test ${PIPESTATUS[0]} -eq 0
+      - name: status tests by name
+        working-directory: codex-rs
+        run: cargo test -p codex-telegram status -- --nocapture --test-threads 1 2>&1 | grep -E "^test |test result" | tee ../status-tests.txt
+      - name: clippy
+        working-directory: codex-rs
+        run: cargo clippy -p codex-telegram --tests -- -D warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: telegram-test-output
+          path: |
+            telegram-tests.txt
+            status-tests.txt
